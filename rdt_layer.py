@@ -13,6 +13,15 @@ from segment import Segment
 # This file is meant to be changed.                                                                                    #
 #                                                                                                                      #
 #                                                                                                                      #
+#                                                                                                                      #
+#                                                                                                                      #
+# SOURCES:                                                                                                             #
+# https://gaia.cs.umass.edu/kurose_ross/interactive/rdt30.php                                                          #
+# https://www.youtube.com/watch?v=vxgH6r-II2Q                                                                          #
+# http://www2.ic.uff.br/~michael/kr1999/3-transport/3_040-principles_rdt.htmo                                          #
+# https://www.d.umn.edu/~gshute/net/reliable-data-transfer.xhtml                                                       #
+#                                                                                                                      #
+#                                                                                                                      #
 # #################################################################################################################### #
 
 
@@ -27,6 +36,7 @@ class RDTLayer(object):
     # ################################################################################################################ #
     DATA_LENGTH = 4 # in characters                     # The length of the string data that will be sent per packet...
     FLOW_CONTROL_WIN_SIZE = 15 # in characters          # Receive window size for flow-control
+    TIMEOUT_LIMIT = 3                                   # Number of iterations before a timeout is called
     sendChannel = None
     receiveChannel = None
     dataToSend = ''
@@ -48,8 +58,25 @@ class RDTLayer(object):
         self.dataReceived = ''
         self.currentIteration = 0
         self.seqNum = 0
-        self.countSegmentTimeouts = 0
+        self.ackNum = -1
         self.wait = False
+        self.resend = False
+
+        # Track sent and ack characters
+        self.send_base = 0
+        self.nextseqnum = 0
+
+        # Handles tracking timeouts
+        self.timeOutCounter = 0
+        self.countSegmentTimeouts = 0
+
+        # use for printing
+        self.charsAck = 0
+        self.charsSent = 0
+
+        # Holds record of sent segments
+        self.sentBuffer = dict()
+
         # Add items as needed
 
     # ################################################################################################################ #
@@ -125,16 +152,6 @@ class RDTLayer(object):
     # ################################################################################################################ #
     def processSend(self):
 
-        # Create data segments to send
-        # packetList = []
-        # char = 0
-        # while char < len(self.dataToSend):
-        #     packetList.append(self.dataToSend[char:(char+4)])
-        #     char += 4
-        #
-        # while self.sentPackets < len(packetList):
-        #     if self.sentNotAck < RDTLayer.FLOW_CONTROL_WIN_SIZE:
-
         # If there is no data to send, skip this
         if self.dataToSend == '':
             print("No data to send")
@@ -155,17 +172,20 @@ class RDTLayer(object):
             # The seqnum is the sequence number for the segment (in character number, not bytes)
 
             # Create packet to send and increment packets sent
-            # while self.sentNotAck < RDTLayer.FLOW_CONTROL_WIN_SIZE:
-            # print("data should be: ", self.dataToSend[charsToSend:(charsToSend + 4)])
-            # data = packetList[self.sentPackets]
-            data = self.dataToSend[:4]
+            capacity = min([RDTLayer.DATA_LENGTH, (RDTLayer.FLOW_CONTROL_WIN_SIZE - (self.nextseqnum - self.send_base))])
+            data = self.dataToSend[self.charsSent:(self.charsSent + capacity)]
 
             # #################################################################################################### #
             # Display sending segment
             segmentSend.setData(self.seqNum, data)
             print("Sending segment: ", segmentSend.to_string())
+            self.charsSent += len(data)
+            print("Chars sent: %d  Chars ack: %d  Window Space: %d" % (self.charsSent, self.charsAck, (RDTLayer.FLOW_CONTROL_WIN_SIZE - (self.charsSent - self.charsAck))))
             print("Wait is TRUE")
             self.wait = True
+
+            # Add sent packet to packet buffer
+            self.sentBuffer[self.seqNum] = [data, segmentSend, 'no']
 
             # Use the unreliable sendChannel to send the segment
             self.sendChannel.send(segmentSend)
@@ -186,6 +206,16 @@ class RDTLayer(object):
         listIncomingSegments = self.receiveChannel.receive()
         if len(listIncomingSegments) == 0:
             print("No segments received")
+            self.timeOutCounter += 1
+            print("Timeout counter: ", self.timeOutCounter)
+
+            # TIMEOUT - If timeout counter is exceeded, increment Timeout Count and resend packet
+            if self.timeOutCounter > 3:
+                print("TIMEOUT: Resending data")
+                self.wait = False
+                self.countSegmentTimeouts += 1
+                self.processSend()
+
             return
 
         # This just displays the incoming segments
@@ -204,25 +234,29 @@ class RDTLayer(object):
             print("checksum is: ", item.checkChecksum())
             # Check if segment contains data or is ACK packet
             if item.payload != "":
+                self.timeOutCounter = 0
                 # Data is valid, unpack data and send ACK
                 if item.checkChecksum():
                     # If seq num matches, receive data, otherwise just send ACK
+                    print("item: %d, self: %d" % (item.seqnum, self.seqNum))
                     if item.seqnum == self.seqNum:
+                        # self.ackNum = self.seqNum
+                        self.ackNum = item.seqnum
                         self.dataReceived = self.dataReceived + item.payload
-                    if self.seqNum == 0:
-                        self.seqNum = 1
-                    else:
-                        self.seqNum = 0
-                    acknum = "0"
-                    segmentAck.setAck(acknum)
+                    self.seqNum += 1
+                    # if self.seqNum == 0:
+                    #     self.seqNum = 1
+                    # else:
+                    #     self.seqNum = 0
+                    segmentAck.setAck(self.ackNum)
                     print("Sending ack: ", segmentAck.to_string())
                     self.sendChannel.send(segmentAck)
 
                 # send NAK
                 else:
-                    acknum = "-1"
-                    segmentAck.setAck(acknum)
+                    segmentAck.setAck(self.ackNum)
                     print("Sending ack: ", segmentAck.to_string())
+                    print("Need to send: %d" % self.seqNum)
                     self.sendChannel.send(segmentAck)
 
 
@@ -238,33 +272,49 @@ class RDTLayer(object):
                 # Checksum is valid
                 if item.checkChecksum():
                     # Received NAK, resend packet
-                    if item.acknum == '-1':
+                    # if item.acknum != self.seqNum:
+                    if item.acknum != self.seqNum:
+                        self.timeOutCounter += 1
                         print("NAK - Wait FALSE")
-                        self.wait = False
-                        print("Resending data")
-                        self.processSend()
+                        # self.wait = False
+                        print("Resending data for ack: %d" % (self.ackNum + 1))
+                        self.resendPacket(self.ackNum + 1)
+                        # self.processSend()
 
                     # Received ACK, update seq num and send next packet
                     else:
-                        if self.seqNum == 0:
-                            self.seqNum = 1
-                        else:
-                            self.seqNum = 0
+                        # if self.seqNum == 0:
+                        #     self.seqNum = 1
+                        # else:
+                        #     self.seqNum = 0
+                        self.send_base += len(self.sentBuffer[self.seqNum][0])
+                        self.seqNum += 1
                         print("ACK - Wait FALSE")
                         self.wait = False
-                        self.dataToSend = self.dataToSend[4:]
+                        self.timeOutCounter = 0
+                        self.ackNum = item.acknum
+                        # print("ACK - Window is now: %d" % (self.charsSent - self.charsAck))
+                        # self.dataToSend = self.dataToSend[4:]
                         self.processSend()
 
                 # Checksum is corrupted, resend packet
                 else:
                     print("Garbled ACK/NAK - Retransmitting")
-                    self.wait = False
-                    self.processSend()
+                    self.timeOutCounter += 1
+                    # self.wait = False
+                    self.resendPacket(self.ackNum + 1)
+                    # self.processSend()
+
+                if self.timeOutCounter > 3:
+                    print("TIMEOUT: Resending data")
+                    # self.wait = False
+                    self.countSegmentTimeouts += 1
+                    self.resendPacket(self.ackNum + 1)
+                    # self.processSend()
 
         # Somewhere in here you will be setting the contents of the ack segments to send.
         # The goal is to employ cumulative ack, just like TCP does...
         # acknum = "0"
-
 
         # ############################################################################################################ #
         # Display response segment
@@ -273,4 +323,10 @@ class RDTLayer(object):
 
         # Use the unreliable sendChannel to send the ack packet
         # self.sendChannel.send(segmentAck)
+
+    def resendPacket(self, sequenceNumber):
+        segmentSend = self.sentBuffer[sequenceNumber][1]
+        segmentSend.setData(sequenceNumber, self.sentBuffer[sequenceNumber][0])
+        print("Sending segment: ", segmentSend.to_string())
+        self.sendChannel.send(segmentSend)
 
