@@ -239,9 +239,6 @@ class RDTLayer(object):
             # The data is just part of the entire string that you are trying to send.
             # The seqnum is the sequence number for the segment (in character number, not bytes)
 
-            # Create packet to send and increment packets sent
-            # capacity = min([RDTLayer.DATA_LENGTH, (RDTLayer.FLOW_CONTROL_WIN_SIZE - (self.nextseqnum - self.send_base))])
-            # data = self.dataToSend[self.charsSent:(self.charsSent + capacity)]
 
             # #################################################################################################### #
             # Display sending segment
@@ -285,11 +282,6 @@ class RDTLayer(object):
 
             return
 
-        # This just displays the incoming segments
-        # for item in listIncomingSegments:
-        #     print("Item is: ")
-        #     item.printToConsole()
-
         # ############################################################################################################ #
         # What segments have been received?
         # How will you get them back in order?
@@ -314,15 +306,9 @@ class RDTLayer(object):
                         # self.ackNum = self.seqNum
                         self.ackNum = item.seqnum
                         self.sentBuffer[item.seqnum] = [item.payload]
-                        # self.dataReceived = self.dataReceived + item.payload
                         self.seqNum += 1
-                    # if self.seqNum == 0:
-                    #     self.seqNum = 1
-                    # else:
-                    #     self.seqNum = 0
                         segmentAck.setAck(self.ackNum)
                     print("Sending ack: ", segmentAck.to_string())
-                    # print("Segment is: ", segmentAck)
                     self.sendChannel.send(segmentAck)
 
                 # send NAK
@@ -346,18 +332,11 @@ class RDTLayer(object):
                 if item.checkChecksum():
                     print("ACK - checksum is: ", item.checkChecksum())
                     # Received NAK, resend packet
-                    # if item.acknum != self.seqNum:
                     if self.ackNum < 0:
                         self.ackNum = 0
                     print("item: %d, self: %d" % (item.acknum, self.ackNum))
                     if item.acknum != self.ackNum:
                         print("Bad ACK")
-                        # self.timeOutCounter += 1
-                        # print("NAK - Wait FALSE")
-                        # self.wait = False
-                        # print("Resending data for ack: %d" % self.ackNum)
-                        # self.resendPacket(self.ackNum)
-                        # self.processSend()
 
                     # Received ACK, update seq num and send next packet
                     else:
@@ -392,6 +371,8 @@ class RDTLayer(object):
                         self.ackNum += 1
                         # print("ACK - Window is now: %d" % (self.charsSent - self.charsAck))
 
+
+                # This was used for earlier iterations w/ stop and wait
                 # Checksum is corrupted, resend packet
                 else:
                     pass
